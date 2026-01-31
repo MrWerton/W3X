@@ -4,9 +4,10 @@
   const MIN_RATE = 0.25;
   const MAX_RATE = 5.0;
   const EPSILON = 0.0001;
+  const OVERLAY_TIMEOUT = 2000;
   const STORAGE_KEYS = {
-    rate: 'globalRate',
-    last: 'globalLastNonDefault',
+    rate: "globalRate",
+    last: "globalLastNonDefault",
   };
 
   let lastActiveVideo = null;
@@ -17,7 +18,7 @@
 
   function ensureStyles() {
     if (stylesInjected) return;
-    const style = document.createElement('style');
+    const style = document.createElement("style");
     style.textContent = `
       .speed-video-ui {
         position: absolute;
@@ -32,8 +33,13 @@
         font: 12px/1.2 Arial, sans-serif;
         border-radius: 6px;
         pointer-events: none;
+        opacity: 0;
         user-select: none;
         max-width: calc(100% - 16px);
+        transition: opacity 150ms ease;
+      }
+      .speed-video-ui.is-visible {
+        opacity: 1;
       }
       .speed-video-rate {
         font-weight: 600;
@@ -47,7 +53,7 @@
   function getState(video) {
     let state = videoState.get(video);
     if (!state) {
-      state = { ui: null, rateLabel: null };
+      state = { ui: null, rateLabel: null, hideTimeout: null };
       videoState.set(video, state);
     }
     return state;
@@ -58,7 +64,7 @@
     const tag = target.tagName;
     if (!tag) return false;
     if (target.isContentEditable) return true;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
   }
 
   function isVideoVisible(video) {
@@ -66,17 +72,28 @@
     const rect = video.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
     const style = getComputedStyle(video);
-    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') {
+    if (
+      style.visibility === "hidden" ||
+      style.display === "none" ||
+      style.opacity === "0"
+    ) {
       return false;
     }
     const viewWidth = window.innerWidth || document.documentElement.clientWidth;
-    const viewHeight = window.innerHeight || document.documentElement.clientHeight;
-    return rect.bottom > 0 && rect.right > 0 && rect.top < viewHeight && rect.left < viewWidth;
+    const viewHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    return (
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < viewHeight &&
+      rect.left < viewWidth
+    );
   }
 
   function chooseVideo() {
-    if (lastActiveVideo && document.contains(lastActiveVideo)) return lastActiveVideo;
-    const videos = Array.from(document.querySelectorAll('video'));
+    if (lastActiveVideo && document.contains(lastActiveVideo))
+      return lastActiveVideo;
+    const videos = Array.from(document.querySelectorAll("video"));
     if (videos.length === 0) return null;
 
     const visibleVideos = videos.filter(isVideoVisible);
@@ -129,18 +146,18 @@
 
     if (!parent.dataset.speedVideoUiPositioned) {
       const parentStyle = getComputedStyle(parent);
-      if (parentStyle.position === 'static') {
-        parent.style.position = 'relative';
+      if (parentStyle.position === "static") {
+        parent.style.position = "relative";
       }
-      parent.dataset.speedVideoUiPositioned = 'true';
+      parent.dataset.speedVideoUiPositioned = "true";
     }
 
-    const ui = document.createElement('div');
-    ui.className = 'speed-video-ui';
-    ui.setAttribute('data-speed-video-ui', '');
+    const ui = document.createElement("div");
+    ui.className = "speed-video-ui";
+    ui.setAttribute("data-speed-video-ui", "");
 
-    const rateLabel = document.createElement('div');
-    rateLabel.className = 'speed-video-rate';
+    const rateLabel = document.createElement("div");
+    rateLabel.className = "speed-video-rate";
     rateLabel.textContent = formatRate(globalRate);
 
     ui.append(rateLabel);
@@ -157,8 +174,19 @@
     state.rateLabel.textContent = formatRate(rate);
   }
 
-  function applyRateToVideo(video, rate) {
+  function showOverlay(video) {
+    const state = ensureUI(video);
+    if (!state || !state.ui) return;
+    state.ui.classList.add("is-visible");
+    clearTimeout(state.hideTimeout);
+    state.hideTimeout = setTimeout(() => {
+      if (state.ui) state.ui.classList.remove("is-visible");
+    }, OVERLAY_TIMEOUT);
+  }
+
+  function applyRateToVideo(video, rate, options = {}) {
     if (!video) return;
+    const { show = false } = options;
     const clamped = clampRate(rate);
     if (Math.abs(video.playbackRate - clamped) > EPSILON) {
       video.playbackRate = clamped;
@@ -167,14 +195,17 @@
       video.defaultPlaybackRate = clamped;
     }
     updateUI(video, clamped);
+    if (show) showOverlay(video);
   }
 
-  function applyRateToAllVideos(rate) {
-    document.querySelectorAll('video').forEach((video) => applyRateToVideo(video, rate));
+  function applyRateToAllVideos(rate, options = {}) {
+    document
+      .querySelectorAll("video")
+      .forEach((video) => applyRateToVideo(video, rate, options));
   }
 
   function setGlobalRate(rate, options = {}) {
-    const { persist = true } = options;
+    const { persist = true, show = true } = options;
     const clamped = clampRate(rate);
     const prevRate = globalRate;
     globalRate = clamped;
@@ -185,7 +216,7 @@
       globalLastNonDefault = prevRate;
     }
 
-    applyRateToAllVideos(clamped);
+    applyRateToAllVideos(clamped, { show });
 
     if (persist && chrome?.storage?.local) {
       const payload = { [STORAGE_KEYS.rate]: clamped };
@@ -207,7 +238,10 @@
       setGlobalRate(DEFAULT_RATE);
       return;
     }
-    if (globalLastNonDefault && Math.abs(globalLastNonDefault - DEFAULT_RATE) > EPSILON) {
+    if (
+      globalLastNonDefault &&
+      Math.abs(globalLastNonDefault - DEFAULT_RATE) > EPSILON
+    ) {
       setGlobalRate(globalLastNonDefault);
     }
   }
@@ -217,16 +251,16 @@
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
-    if (key !== 'a' && key !== 'd' && key !== 's') return;
+    if (key !== "a" && key !== "d" && key !== "s") return;
 
     const video = chooseVideo();
     if (!video) return;
 
-    if (key === 'd') {
+    if (key === "d") {
       nudgeRate(STEP);
-    } else if (key === 'a') {
+    } else if (key === "a") {
       nudgeRate(-STEP);
-    } else if (key === 's') {
+    } else if (key === "s") {
       toggleDefaultRate();
     }
 
@@ -243,14 +277,15 @@
     };
 
     ensureUI(video);
-    applyRateToVideo(video, globalRate);
+    applyRateToVideo(video, globalRate, { show: false });
 
-    video.addEventListener('play', markActive, true);
-    video.addEventListener('click', markActive, true);
-    video.addEventListener('mouseover', markActive, true);
-    video.addEventListener('ratechange', () => {
+    video.addEventListener("play", markActive, true);
+    video.addEventListener("click", markActive, true);
+    video.addEventListener("mouseover", markActive, true);
+    video.addEventListener("ratechange", () => {
       const newRate = sanitizeRate(video.playbackRate);
       updateUI(video, newRate);
+      showOverlay(video);
       if (Math.abs(newRate - globalRate) > EPSILON) {
         setGlobalRate(newRate);
       }
@@ -258,13 +293,16 @@
   }
 
   function scanVideos() {
-    document.querySelectorAll('video').forEach(bindVideo);
+    document.querySelectorAll("video").forEach(bindVideo);
   }
 
   function initStorage() {
     if (!chrome?.storage?.local) return;
     chrome.storage.local.get([STORAGE_KEYS.rate, STORAGE_KEYS.last], (data) => {
-      const hasRate = Object.prototype.hasOwnProperty.call(data, STORAGE_KEYS.rate);
+      const hasRate = Object.prototype.hasOwnProperty.call(
+        data,
+        STORAGE_KEYS.rate,
+      );
       const storedRate = hasRate ? data[STORAGE_KEYS.rate] : DEFAULT_RATE;
       globalRate = sanitizeRate(storedRate);
 
@@ -275,14 +313,14 @@
         chrome.storage.local.set({ [STORAGE_KEYS.rate]: globalRate });
       }
 
-      applyRateToAllVideos(globalRate);
+      applyRateToAllVideos(globalRate, { show: false });
     });
 
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local') return;
+      if (area !== "local") return;
       if (changes[STORAGE_KEYS.rate]) {
         globalRate = sanitizeRate(changes[STORAGE_KEYS.rate].newValue);
-        applyRateToAllVideos(globalRate);
+        applyRateToAllVideos(globalRate, { show: true });
       }
       if (changes[STORAGE_KEYS.last]) {
         const last = Number(changes[STORAGE_KEYS.last].newValue);
@@ -295,14 +333,14 @@
     if (!chrome?.runtime?.onMessage) return;
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!msg || !msg.action) return;
-      if (msg.action === 'getRate') {
+      if (msg.action === "getRate") {
         sendResponse({ rate: globalRate });
         return;
       }
-      if (msg.action === 'setRate') {
+      if (msg.action === "setRate") {
         const rate = Number(msg.rate);
         if (!Number.isFinite(rate)) {
-          sendResponse({ error: 'invalid rate' });
+          sendResponse({ error: "invalid rate" });
           return;
         }
         setGlobalRate(rate);
@@ -312,10 +350,13 @@
   }
 
   const observer = new MutationObserver(() => scanVideos());
-  observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  observer.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+  });
 
   scanVideos();
   initStorage();
   initMessaging();
-  window.addEventListener('keydown', handleKeydown, true);
+  window.addEventListener("keydown", handleKeydown, true);
 })();
