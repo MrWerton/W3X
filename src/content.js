@@ -253,7 +253,8 @@
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
-    if (key !== "a" && key !== "d" && key !== "s") return;
+    if (key !== "a" && key !== "d" && key !== "s" && key !== "z" && key !== "x")
+      return;
 
     const video = chooseVideo();
     if (!video) return;
@@ -264,6 +265,13 @@
       nudgeRate(-STEP);
     } else if (key === "s") {
       toggleDefaultRate();
+    } else if (key === "z") {
+      const target = Math.max(0, (video.currentTime || 0) - 5);
+      video.currentTime = target;
+    } else if (key === "x") {
+      const duration = Number.isFinite(video.duration) ? video.duration : null;
+      const next = (video.currentTime || 0) + 5;
+      video.currentTime = duration ? Math.min(duration, next) : next;
     }
 
     event.preventDefault();
