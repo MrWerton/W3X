@@ -15,13 +15,17 @@
   let stylesInjected = false;
   let globalRate = DEFAULT_RATE;
   let globalLastNonDefault = null;
+  let sharedUi = null;
+  let sharedRateLabel = null;
+  let sharedHideTimeout = null;
+  let sharedPositionRaf = null;
 
   function ensureStyles() {
     if (stylesInjected) return;
     const style = document.createElement("style");
     style.textContent = `
       .speed-video-ui {
-        position: absolute;
+        position: fixed;
         top: 8px;
         left: 8px;
         z-index: 999999;
@@ -53,7 +57,7 @@
   function getState(video) {
     let state = videoState.get(video);
     if (!state) {
-      state = { ui: null, rateLabel: null, hideTimeout: null, expectedRate: null };
+      state = { expectedRate: null };
       videoState.set(video, state);
     }
     return state;
@@ -138,18 +142,9 @@
     if (!video) return null;
     ensureStyles();
 
-    const state = getState(video);
-    if (state.ui && state.ui.isConnected) return state;
-
-    const parent = video.parentElement;
-    if (!parent) return state;
-
-    if (!parent.dataset.speedVideoUiPositioned) {
-      const parentStyle = getComputedStyle(parent);
-      if (parentStyle.position === "static") {
-        parent.style.position = "relative";
-      }
-      parent.dataset.speedVideoUiPositioned = "true";
+    if (sharedUi && sharedUi.isConnected) {
+      positionOverlay(video);
+      return sharedUi;
     }
 
     const ui = document.createElement("div");
@@ -161,32 +156,49 @@
     rateLabel.textContent = formatRate(globalRate);
 
     ui.append(rateLabel);
-    parent.appendChild(ui);
+    document.body.appendChild(ui);
 
-    state.ui = ui;
-    state.rateLabel = rateLabel;
-    return state;
+    sharedUi = ui;
+    sharedRateLabel = rateLabel;
+    positionOverlay(video);
+    return ui;
+  }
+
+  function positionOverlay(video) {
+    if (!video || !sharedUi) return;
+    if (sharedPositionRaf) cancelAnimationFrame(sharedPositionRaf);
+    sharedPositionRaf = requestAnimationFrame(() => {
+      if (!sharedUi || !video.isConnected) return;
+      const rect = video.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const top = Math.max(8, rect.top + 8);
+      const left = Math.max(8, rect.left + 8);
+      sharedUi.style.top = `${top}px`;
+      sharedUi.style.left = `${left}px`;
+    });
   }
 
   function updateUI(video, rate) {
-    const state = ensureUI(video);
-    if (!state || !state.rateLabel) return;
-    state.rateLabel.textContent = formatRate(rate);
+    ensureUI(video);
+    if (!sharedRateLabel) return;
+    sharedRateLabel.textContent = formatRate(rate);
+    positionOverlay(video);
   }
 
   function showOverlay(video) {
-    const state = ensureUI(video);
-    if (!state || !state.ui) return;
-    state.ui.classList.add("is-visible");
-    clearTimeout(state.hideTimeout);
-    state.hideTimeout = setTimeout(() => {
-      if (state.ui) state.ui.classList.remove("is-visible");
+    ensureUI(video);
+    if (!sharedUi) return;
+    positionOverlay(video);
+    sharedUi.classList.add("is-visible");
+    clearTimeout(sharedHideTimeout);
+    sharedHideTimeout = setTimeout(() => {
+      if (sharedUi) sharedUi.classList.remove("is-visible");
     }, OVERLAY_TIMEOUT);
   }
 
   function applyRateToVideo(video, rate, options = {}) {
     if (!video) return;
-    const { show = false } = options;
+    const { show = false, updateUi = true } = options;
     const clamped = clampRate(rate);
     const state = getState(video);
     if (Math.abs(video.playbackRate - clamped) > EPSILON) {
@@ -196,14 +208,22 @@
     if (Math.abs(video.defaultPlaybackRate - clamped) > EPSILON) {
       video.defaultPlaybackRate = clamped;
     }
-    updateUI(video, clamped);
-    if (show) showOverlay(video);
+    if (updateUi) {
+      updateUI(video, clamped);
+      if (show) showOverlay(video);
+    }
   }
 
   function applyRateToAllVideos(rate, options = {}) {
-    document
-      .querySelectorAll("video")
-      .forEach((video) => applyRateToVideo(video, rate, options));
+    const { show = false } = options;
+    document.querySelectorAll("video").forEach((video) =>
+      applyRateToVideo(video, rate, { show: false, updateUi: false }),
+    );
+    const active = chooseVideo();
+    if (active) {
+      updateUI(active, clampRate(rate));
+      if (show) showOverlay(active);
+    }
   }
 
   function setGlobalRate(rate, options = {}) {
@@ -382,4 +402,19 @@
   initStorage();
   initMessaging();
   window.addEventListener("keydown", handleKeydown, true);
+  window.addEventListener("resize", () => {
+    const video = chooseVideo();
+    if (!video) return;
+    positionOverlay(video);
+  });
+  window.addEventListener("scroll", () => {
+    const video = chooseVideo();
+    if (!video) return;
+    positionOverlay(video);
+  }, true);
+  document.addEventListener("fullscreenchange", () => {
+    const video = chooseVideo();
+    if (!video) return;
+    positionOverlay(video);
+  });
 })();
