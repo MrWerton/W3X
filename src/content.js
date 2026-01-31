@@ -53,7 +53,7 @@
   function getState(video) {
     let state = videoState.get(video);
     if (!state) {
-      state = { ui: null, rateLabel: null, hideTimeout: null };
+      state = { ui: null, rateLabel: null, hideTimeout: null, expectedRate: null };
       videoState.set(video, state);
     }
     return state;
@@ -188,7 +188,9 @@
     if (!video) return;
     const { show = false } = options;
     const clamped = clampRate(rate);
+    const state = getState(video);
     if (Math.abs(video.playbackRate - clamped) > EPSILON) {
+      state.expectedRate = clamped;
       video.playbackRate = clamped;
     }
     if (Math.abs(video.defaultPlaybackRate - clamped) > EPSILON) {
@@ -283,12 +285,25 @@
     video.addEventListener("click", markActive, true);
     video.addEventListener("mouseover", markActive, true);
     video.addEventListener("ratechange", () => {
+      const state = getState(video);
       const newRate = sanitizeRate(video.playbackRate);
+
+      if (
+        state.expectedRate !== null &&
+        Math.abs(newRate - state.expectedRate) <= EPSILON
+      ) {
+        state.expectedRate = null;
+        updateUI(video, newRate);
+        return;
+      }
+
+      if (Math.abs(newRate - globalRate) > EPSILON) {
+        applyRateToVideo(video, globalRate, { show: false });
+        return;
+      }
+
       updateUI(video, newRate);
       showOverlay(video);
-      if (Math.abs(newRate - globalRate) > EPSILON) {
-        setGlobalRate(newRate);
-      }
     });
   }
 
